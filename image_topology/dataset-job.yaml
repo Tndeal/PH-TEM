@@ -1,0 +1,36 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: dataset-job
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+
+      containers:
+      - name: dataset-builder
+        image: tdealwis/dataset-builder:initial
+
+        env:
+        - name: IMAGES_DIR
+          value: "/data/images"
+        - name: OUTPUT_DIR
+          value: "/data/output"
+
+        volumeMounts:
+        - name: data
+          mountPath: /data
+
+        resources:
+          requests:
+            cpu: "1"
+            memory: "2Gi"
+          limits:
+            cpu: "2"
+            memory: "4Gi"
+
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: pvc-tdealwis

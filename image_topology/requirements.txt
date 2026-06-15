@@ -1,0 +1,10 @@
+matplotlib
+ncempy
+numpy
+persim
+ripser
+scikit-learn
+scikit-image
+umap-learn
+pandas
+pyarrow
