@@ -5,9 +5,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY docker_pipeline.py .
+COPY higher_clusters.py .
 
-ENV IMAGES_DIR=/data/images
-ENV OUTPUT_DIR=/data/output
+ENV IMAGES_DIR=/data/test_images
+ENV OUTPUT_DIR=/data/output_2
 
-CMD ["python", "docker_pipeline.py"]
+CMD ["python", "higher_clusters.py"]

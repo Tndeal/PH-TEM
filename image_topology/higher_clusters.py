@@ -10,6 +10,7 @@ def main():
     import umap
     from sklearn.cluster import KMeans
     from skimage.util import view_as_windows
+    from scipy.ndimage import gaussian_filter
     import numpy as np
     from persim import PersistenceImager
     from ripser import lower_star_img
@@ -27,14 +28,18 @@ def main():
         birth_range=(400, 700),
         pers_range=(0, 300)
     )
+    pimgr_fit = False
 
     def PH_patch(patched_image):
+        nonlocal pimgr_fit
         dgms = []
         for p in patched_image:      
             dgm = lower_star_img(p)
             dgm = dgm[np.isfinite(dgm[:,1])]
             dgms.append(dgm)
-        pimgr.fit(dgms)
+        if pimgr_fit == False:
+            pimgr.fit(dgms[0])
+            pimgr_fit = True
         vectors = []
         for dgm in dgms:
             pimg = pimgr.transform(dgm)
@@ -63,73 +68,106 @@ def main():
 
         return positions
 
-    def label_to_image(original_image, labels, positions, patch_size=16, n_clusters=None):
+    def label_to_image(original_image, labels, positions, patch_size=16):
         H, W = original_image.shape[:2]
 
-        if n_clusters is None:
-            n_clusters = np.max(labels) + 1
-
-        votes = np.zeros((H, W, n_clusters), dtype=np.float32)
+        label_img = np.zeros((H, W), dtype=np.uint8)
+        vote_img  = np.zeros((H, W), dtype=np.uint8)
 
         for (r, c), lab in zip(positions, labels):
-            votes[r:r+patch_size, c:c+patch_size, lab] += 1
+            r_end = min(r + patch_size, H)
+            c_end = min(c + patch_size, W)
 
-        return np.argmax(votes, axis=-1)
+            region = (slice(r, r_end), slice(c, c_end))
 
+            votes = vote_img[region] + 1
+
+            mask = votes >= vote_img[region]
+
+            label_patch = label_img[region]
+            label_patch[mask] = lab
+
+            vote_img[region][mask] = votes[mask]
+
+        return label_img
+
+    def iter_patch_batches(image, patch_size=16, stride=8, batch_size=500):
+        patches = []
+        positions = []
+
+        blocks = view_as_windows(image, (patch_size, patch_size), step=stride)
+        n_rows, n_cols = blocks.shape[:2]
+
+        for i in range(n_rows):
+            for j in range(n_cols):
+                patches.append(blocks[i, j])
+                positions.append((i * stride, j * stride))
+
+                if len(patches) == batch_size:
+                    yield np.array(patches), positions
+                    patches, positions = [], []
+
+        if patches:
+            yield np.array(patches), positions
 
     analysis_dataset = []
 
     base_dir = Path(os.environ["IMAGES_DIR"]) / "2022_02_02 5nm Ag nanoparticles on UTC"
 
-    for dm3_file in islice(base_dir.glob("*.dm3"), 1):
-        truth_image = (base_dir
-            / "Labels"
-            / f"{dm3_file.stem}_label.png"
-        )
-        truth_image = mpimg.imread(truth_image)
+    image = base_dir / "20220202_Ag_UTC_330kx_2650e_0p1596s_05.dm3"
+    truth_image = (base_dir
+        / "Labels"
+        / "20220202_Ag_UTC_330kx_2650e_0p1596s_05_label.png"
+    )
+    truth_image = mpimg.imread(truth_image)
 
-        print("Processing:", dm3_file)
 
-        data_dict = dm.dmReader(str(Path(dm3_file).resolve()))
-        image = data_dict['data']
-        vectorised_patches = PH_patch(split_patches(16, image, 8))
+    data_dict = dm.dmReader(str(Path(image).resolve()))
+    image = data_dict['data']
+    all_vectors = []
+    all_positions = []
 
-        X = StandardScaler().fit_transform(vectorised_patches)
+    for patch_batch, pos_batch in iter_patch_batches(image):
+        vec = PH_patch(patch_batch)
+        all_vectors.append(vec)
+        all_positions.extend(pos_batch)
 
-        reducer = umap.UMAP(
-            n_components=2,
-            n_neighbors=15,
-            min_dist=0.1,
-            metric="euclidean",
-            random_state=42
-        )
+    vectorised_patches = np.vstack(all_vectors)
+    positions = all_positions
 
-        embedding = reducer.fit_transform(X)
+    X = StandardScaler().fit_transform(vectorised_patches)
 
-        kmeans = KMeans(n_clusters=8, random_state=42)
-        labels = kmeans.fit_predict(embedding)
+    reducer = umap.UMAP(
+        n_components=2,
+        n_neighbors=15,
+        min_dist=0.1,
+        metric="euclidean",
+        random_state=42,
+        low_memory=True
+    )
 
-        positions = get_positions(image)
-        label_img = label_to_image(image, labels, positions, 8)
+    embedding = reducer.fit_transform(X)
 
-        mean_intensities = [image[label_img==cl].mean() for cl in np.unique(labels)]
-        crystal_cluster = np.argmin(mean_intensities)
+    kmeans = KMeans(n_clusters=7, random_state=42)
+    labels = kmeans.fit_predict(embedding)
 
-        mask = (label_img == crystal_cluster).astype(np.uint8)
+    #positions = get_positions(image, 8)
+    #label_img = label_to_image(image, labels, positions)
 
-        image_datapoint = {
-            'name': dm3_file,
-            'vectors': vectorised_patches,
-            'labels': labels,
-            'cluster_image': label_img,
-        }
-        analysis_dataset.append(image_datapoint)
+    #mean_intensities = [image[label_img==cl].mean() for cl in np.unique(labels)]
+    #crystal_cluster = np.argmin(mean_intensities)
+
+    #mask = (label_img == crystal_cluster).astype(np.uint8)
+
+    image_datapoint = {
+        'clustered': labels,
+    }
 
     OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "/project/dataset")
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    df = pd.DataFrame(analysis_dataset)
-    df.to_parquet(os.path.join(OUTPUT_DIR, "analysis_dataset.parquet"), index=False)
+    df = pd.DataFrame(image_datapoint)
+    df.to_parquet(os.path.join(OUTPUT_DIR, "image_datapoint_7.parquet"), index=False)
     print(f'dataset exported to {OUTPUT_DIR}')
 
 if __name__ == "__main__":

@@ -8,3 +8,5 @@ scikit-image
 umap-learn
 pandas
 pyarrow
+pathlib 
+scipy
