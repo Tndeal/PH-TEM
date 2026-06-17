@@ -6,7 +6,7 @@ def main():
     from pathlib import Path
     import matplotlib.pyplot as plt
     import matplotlib.image as mpimg
-    from sklearn.preprocessing import StandardScaler
+    from sklearn.preprocessing import RobustScaler
     import umap
     from sklearn.cluster import KMeans
     from skimage.util import view_as_windows
@@ -16,6 +16,12 @@ def main():
     from ripser import lower_star_img
     import pandas as pd
     from itertools import islice
+
+    def rank_transform(patch):
+        flat = patch.flatten()
+        order = flat.argsort()
+        ranks = order.argsort()
+        return ranks.reshape(patch.shape).astype(np.float32)
 
     def split_patches(patch_size, image, stride):
         blocks = view_as_windows(image, window_shape=(patch_size, patch_size), step=stride)
@@ -128,14 +134,15 @@ def main():
     all_positions = []
 
     for patch_batch, pos_batch in iter_patch_batches(image):
-        vec = PH_patch(patch_batch)
+        ranked_batch = [rank_transform(p) for p in patch_batch]
+        vec = PH_patch(ranked_batch)
         all_vectors.append(vec)
         all_positions.extend(pos_batch)
 
     vectorised_patches = np.vstack(all_vectors)
     positions = all_positions
 
-    X = StandardScaler().fit_transform(vectorised_patches)
+    X = RobustScaler().fit_transform(vectorised_patches)
 
     reducer = umap.UMAP(
         n_components=2,
@@ -167,7 +174,7 @@ def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     df = pd.DataFrame(image_datapoint)
-    df.to_parquet(os.path.join(OUTPUT_DIR, "image_datapoint_7.parquet"), index=False)
+    df.to_parquet(os.path.join(OUTPUT_DIR, "image_datapoint_7_s.parquet"), index=False)
     print(f'dataset exported to {OUTPUT_DIR}')
 
 if __name__ == "__main__":
