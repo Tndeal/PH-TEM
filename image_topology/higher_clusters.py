@@ -138,7 +138,7 @@ def main():
 
     for patch_batch, pos_batch in iter_patch_batches(image):
         normalized_batch = [z_score_transform(p) for p in patch_batch]
-        vec = PH_patch(ranked_batch)
+        vec = PH_patch(normalized_batch)
         all_vectors.append(vec)
         all_positions.extend(pos_batch)
 
@@ -177,7 +177,7 @@ def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     df = pd.DataFrame(image_datapoint)
-    df.to_parquet(os.path.join(OUTPUT_DIR, "image_datapoint_7_s.parquet"), index=False)
+    df.to_parquet(os.path.join(OUTPUT_DIR, "image_datapoint_7_z.parquet"), index=False)
     print(f'dataset exported to {OUTPUT_DIR}')
 
 if __name__ == "__main__":
