@@ -17,11 +17,11 @@ def main():
     import pandas as pd
     from itertools import islice
 
-    def rank_transform(patch):
-        flat = patch.flatten()
-        order = flat.argsort()
-        ranks = order.argsort()
-        return ranks.reshape(patch.shape).astype(np.float32)
+    def z_score_transform(patch):
+        std = np.std(patch)
+        if std > 1e-6:
+            return (patch - np.mean(patch)) / std
+        return patch - np.mean(patch)
 
     def split_patches(patch_size, image, stride):
         blocks = view_as_windows(image, window_shape=(patch_size, patch_size), step=stride)
@@ -30,9 +30,9 @@ def main():
         return patches
 
     pimgr = PersistenceImager(
-        pixel_size=16,
-        birth_range=(400, 700),
-        pers_range=(0, 300)
+        pixel_size=0.2,      
+        birth_range=(-4, 4),
+        pers_range=(0, 4)     
     )
     pimgr_fit = False
 
@@ -48,9 +48,12 @@ def main():
             pimgr_fit = True
         vectors = []
         for dgm in dgms:
-            pimg = pimgr.transform(dgm)
-            vec = pimg.ravel()
-            vectors.append(vec)
+            if len(dgm) == 0:
+                vectors.append(np.zeros(pimgr.resolution[0] * pimgr.resolution[1]))
+            else:
+                pimg = pimgr.transform(dgm)
+                vec = pimg.ravel()
+                vectors.append(vec)
         vectors = np.vstack(vectors)
         return vectors
 
@@ -134,7 +137,7 @@ def main():
     all_positions = []
 
     for patch_batch, pos_batch in iter_patch_batches(image):
-        ranked_batch = [rank_transform(p) for p in patch_batch]
+        normalized_batch = [z_score_transform(p) for p in patch_batch]
         vec = PH_patch(ranked_batch)
         all_vectors.append(vec)
         all_positions.extend(pos_batch)
