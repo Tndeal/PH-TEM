@@ -34,7 +34,7 @@ def main():
 
     pimgr = PersistenceImager(
         pixel_size=16,
-        birth_range=(400, 700),
+        birth_range=(400, 800),
         pers_range=(0, 300)
     )
     pimgr_fit = False
@@ -60,7 +60,7 @@ def main():
         vectors = np.vstack(vectors)
         return vectors
 
-    def get_positions(image_data, patch_size=16, stride=None):
+    def get_positions(image_data, patch_size=64, stride=None):
         if stride is None:
             stride = patch_size
 
@@ -103,7 +103,7 @@ def main():
 
         return label_img
 
-    def iter_patch_batches(image, patch_size=16, stride=8, batch_size=500):
+    def iter_patch_batches(image, patch_size=64, stride=16, batch_size=500):
         patches = []
 
         blocks = view_as_windows(image, (patch_size, patch_size), step=stride)
@@ -138,16 +138,16 @@ def main():
 
     #image_small = resize(image, (256, 256), anti_aliasing=True).astype(np.float32)
     
-    field = gaussian_filter(image, sigma=500)
+    #field = gaussian_filter(image, sigma=500)
     #large_scale_field = resize(field_small, image.shape, order=1, mode='reflect').astype(np.float32)
 
-    global_mean = np.mean(image)
-    flattened_image = (image / (field + 1e-6)) * global_mean
-    denoised = denoise_nl_means(flattened_image, h=0.02)
+    #global_mean = np.mean(image)
+    #flattened_image = (image / (field + 1e-6)) * global_mean
+    #denoised = denoise_nl_means(flattened_image, h=0.02)
     #flattened_image = np.clip(flattened_image, 0, 65535).astype(np.uint16)
     all_vectors = []
 
-    for patch_batch in iter_patch_batches(denoised):
+    for patch_batch in iter_patch_batches(image):
         #normalized_batch = [z_score_transform(p) for p in patch_batch]
         vec = PH_patch(patch_batch)
         all_vectors.append(vec)
@@ -186,7 +186,7 @@ def main():
 
     #tifffile.imwrite(os.path.join(OUTPUT_DIR, "image_flattened.tif"), flattened_image)
     df = pd.DataFrame(image_datapoint)
-    df.to_parquet(os.path.join(OUTPUT_DIR, "image_denoised.parquet"), index=False)
+    df.to_parquet(os.path.join(OUTPUT_DIR, "larger_patch.parquet"), index=False)
     print(f'dataset exported to {OUTPUT_DIR}')
 
 if __name__ == "__main__":
