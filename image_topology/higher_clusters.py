@@ -6,16 +6,18 @@ def main():
     from pathlib import Path
     import matplotlib.pyplot as plt
     import matplotlib.image as mpimg
-    from sklearn.preprocessing import RobustScaler
+    from sklearn.preprocessing import StandardScaler
     import umap
     from sklearn.cluster import KMeans
     from skimage.util import view_as_windows
+    from skimage.transform import resize
     from scipy.ndimage import gaussian_filter
     import numpy as np
     from persim import PersistenceImager
     from ripser import lower_star_img
     import pandas as pd
     from itertools import islice
+    import tifffile
 
     def z_score_transform(patch):
         std = np.std(patch)
@@ -30,9 +32,9 @@ def main():
         return patches
 
     pimgr = PersistenceImager(
-        pixel_size=0.2,      
-        birth_range=(-4, 4),
-        pers_range=(0, 4)     
+        pixel_size=16,
+        birth_range=(400, 700),
+        pers_range=(0, 300)
     )
     pimgr_fit = False
 
@@ -102,7 +104,6 @@ def main():
 
     def iter_patch_batches(image, patch_size=16, stride=8, batch_size=500):
         patches = []
-        positions = []
 
         blocks = view_as_windows(image, (patch_size, patch_size), step=stride)
         n_rows, n_cols = blocks.shape[:2]
@@ -110,14 +111,13 @@ def main():
         for i in range(n_rows):
             for j in range(n_cols):
                 patches.append(blocks[i, j])
-                positions.append((i * stride, j * stride))
 
                 if len(patches) == batch_size:
-                    yield np.array(patches), positions
-                    patches, positions = [], []
+                    yield np.array(patches)
+                    patches = []
 
         if patches:
-            yield np.array(patches), positions
+            yield np.array(patches)
 
     analysis_dataset = []
 
@@ -133,26 +133,31 @@ def main():
 
     data_dict = dm.dmReader(str(Path(image).resolve()))
     image = data_dict['data']
-    all_vectors = []
-    all_positions = []
+    
 
-    for patch_batch, pos_batch in iter_patch_batches(image):
-        normalized_batch = [z_score_transform(p) for p in patch_batch]
-        vec = PH_patch(normalized_batch)
+    #image_small = resize(image, (256, 256), anti_aliasing=True).astype(np.float32)
+    field = gaussian_filter(image, sigma=500)
+    #large_scale_field = resize(field_small, image.shape, order=1, mode='reflect').astype(np.float32)
+
+    global_mean = np.mean(image)
+    flattened_image = (image / (field + 1e-6)) * global_mean
+    #flattened_image = np.clip(flattened_image, 0, 65535).astype(np.uint16)
+    all_vectors = []
+
+    for patch_batch in iter_patch_batches(flattened_image):
+        #normalized_batch = [z_score_transform(p) for p in patch_batch]
+        vec = PH_patch(patch_batch)
         all_vectors.append(vec)
-        all_positions.extend(pos_batch)
 
     vectorised_patches = np.vstack(all_vectors)
-    positions = all_positions
 
-    X = RobustScaler().fit_transform(vectorised_patches)
+    X = StandardScaler().fit_transform(vectorised_patches)
 
     reducer = umap.UMAP(
         n_components=2,
         n_neighbors=15,
         min_dist=0.1,
         metric="euclidean",
-        random_state=42,
         low_memory=True
     )
 
@@ -176,8 +181,9 @@ def main():
     OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "/project/dataset")
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+    #tifffile.imwrite(os.path.join(OUTPUT_DIR, "image_flattened.tif"), flattened_image)
     df = pd.DataFrame(image_datapoint)
-    df.to_parquet(os.path.join(OUTPUT_DIR, "image_datapoint_7_z.parquet"), index=False)
+    df.to_parquet(os.path.join(OUTPUT_DIR, "image_flattened_run_big_2".parquet"), index=False)
     print(f'dataset exported to {OUTPUT_DIR}')
 
 if __name__ == "__main__":
