@@ -18,6 +18,7 @@ def main():
     import pandas as pd
     from itertools import islice
     import tifffile
+    from skimage.restoration import denoise_nl_means
 
     def z_score_transform(patch):
         std = np.std(patch)
@@ -134,46 +135,39 @@ def main():
     data_dict = dm.dmReader(str(Path(image).resolve()))
     image = data_dict['data']
     
-    gaussian_filtered = []
 
     #image_small = resize(image, (256, 256), anti_aliasing=True).astype(np.float32)
-    sigmas = [50, 100, 200, 300, 400, 500]
+    
+    field = gaussian_filter(image, sigma=500)
+    #large_scale_field = resize(field_small, image.shape, order=1, mode='reflect').astype(np.float32)
 
-    for s in sigmas:
-        field = gaussian_filter(image, sigma=s)
-        #large_scale_field = resize(field_small, image.shape, order=1, mode='reflect').astype(np.float32)
+    global_mean = np.mean(image)
+    flattened_image = (image / (field + 1e-6)) * global_mean
+    denoised = denoise_nl_means(flattened_image, h=0.02)
+    #flattened_image = np.clip(flattened_image, 0, 65535).astype(np.uint16)
+    all_vectors = []
 
-        global_mean = np.mean(image)
-        flattened_image = (image / (field + 1e-6)) * global_mean
-        #flattened_image = np.clip(flattened_image, 0, 65535).astype(np.uint16)
-        all_vectors = []
+    for patch_batch in iter_patch_batches(denoised):
+        #normalized_batch = [z_score_transform(p) for p in patch_batch]
+        vec = PH_patch(patch_batch)
+        all_vectors.append(vec)
 
-        for patch_batch in iter_patch_batches(flattened_image):
-            #normalized_batch = [z_score_transform(p) for p in patch_batch]
-            vec = PH_patch(patch_batch)
-            all_vectors.append(vec)
+    vectorised_patches = np.vstack(all_vectors)
 
-        vectorised_patches = np.vstack(all_vectors)
+    X = StandardScaler().fit_transform(vectorised_patches)
 
-        X = StandardScaler().fit_transform(vectorised_patches)
+    reducer = umap.UMAP(
+        n_components=2,
+        n_neighbors=15,
+        min_dist=0.1,
+        metric="euclidean",
+        low_memory=True
+    )
 
-        reducer = umap.UMAP(
-            n_components=2,
-            n_neighbors=15,
-            min_dist=0.1,
-            metric="euclidean",
-            low_memory=True
-        )
+    embedding = reducer.fit_transform(X)
 
-        embedding = reducer.fit_transform(X)
-
-        kmeans = KMeans(n_clusters=7, random_state=42)
-        labels = kmeans.fit_predict(embedding)
-
-        image_datapoint = {
-        'clustered': labels,
-        }
-        gaussian_filtered.append(image_datapoint)
+    kmeans = KMeans(n_clusters=7, random_state=42)
+    labels = kmeans.fit_predict(embedding)
 
     #positions = get_positions(image, 8)
     #label_img = label_to_image(image, labels, positions)
@@ -183,12 +177,16 @@ def main():
 
     #mask = (label_img == crystal_cluster).astype(np.uint8)
 
+    image_datapoint = {
+        'clustered': labels,
+    }
+
     OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "/project/dataset")
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     #tifffile.imwrite(os.path.join(OUTPUT_DIR, "image_flattened.tif"), flattened_image)
-    df = pd.DataFrame(gaussian_filtered)
-    df.to_parquet(os.path.join(OUTPUT_DIR, "gaussian_filters_experiment.parquet"), index=False)
+    df = pd.DataFrame(image_datapoint)
+    df.to_parquet(os.path.join(OUTPUT_DIR, "image_denoised.parquet"), index=False)
     print(f'dataset exported to {OUTPUT_DIR}')
 
 if __name__ == "__main__":
