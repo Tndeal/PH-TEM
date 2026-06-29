@@ -60,7 +60,7 @@ def main():
         vectors = np.vstack(vectors)
         return vectors
 
-    def get_positions(image_data, patch_size=64, stride=None):
+    def get_positions(image_data, patch_size=16, stride=None):
         if stride is None:
             stride = patch_size
 
@@ -103,7 +103,7 @@ def main():
 
         return label_img
 
-    def iter_patch_batches(image, patch_size=64, stride=16, batch_size=500):
+    def iter_patch_batches(image, patch_size=16, stride=8, batch_size=500):
         patches = []
 
         blocks = view_as_windows(image, (patch_size, patch_size), step=stride)
@@ -120,73 +120,72 @@ def main():
         if patches:
             yield np.array(patches)
 
-    analysis_dataset = []
+    dataset = []
 
-    base_dir = Path(os.environ["IMAGES_DIR"]) / "2022_02_02 5nm Ag nanoparticles on UTC"
+    base_dir = Path(os.environ["IMAGES_DIR"]) / "2022_02_02 5nm Ag nanoparticles on UTC/"
 
-    image = base_dir / "20220202_Ag_UTC_330kx_2650e_0p1596s_05.dm3"
-    truth_image = (base_dir
-        / "Labels"
-        / "20220202_Ag_UTC_330kx_2650e_0p1596s_05_label.png"
-    )
-    truth_image = mpimg.imread(truth_image)
+    for dm3_file in glob.glob(os.path.join(base_dir, "*.dm3")):
+
+        data_dict = dm.dmReader(str(Path(dm3_file).resolve()))
+        image = data_dict['data']
 
 
-    data_dict = dm.dmReader(str(Path(image).resolve()))
-    image = data_dict['data']
-    
+        #image_small = resize(image, (256, 256), anti_aliasing=True).astype(np.float32)
+        
+        #field = gaussian_filter(image, sigma=500)
+        #large_scale_field = resize(field_small, image.shape, order=1, mode='reflect').astype(np.float32)
 
-    #image_small = resize(image, (256, 256), anti_aliasing=True).astype(np.float32)
-    
-    #field = gaussian_filter(image, sigma=500)
-    #large_scale_field = resize(field_small, image.shape, order=1, mode='reflect').astype(np.float32)
+        #global_mean = np.mean(image)
+        #flattened_image = image - field
+        #deno ised = denoise_nl_means(flattened_image, h=0.02)
+        #flattened_image = np.clip(flattened_image, 0, 65535).astype(np.uint16)
+        all_vectors = []
 
-    #global_mean = np.mean(image)
-    #flattened_image = (image / (field + 1e-6)) * global_mean
-    #denoised = denoise_nl_means(flattened_image, h=0.02)
-    #flattened_image = np.clip(flattened_image, 0, 65535).astype(np.uint16)
-    all_vectors = []
+        for patch_batch in iter_patch_batches(image):
+            #normalized_batch = [z_score_transform(p) for p in patch_batch]
+            vec = PH_patch(patch_batch)
+            all_vectors.append(vec)
 
-    for patch_batch in iter_patch_batches(image):
-        #normalized_batch = [z_score_transform(p) for p in patch_batch]
-        vec = PH_patch(patch_batch)
-        all_vectors.append(vec)
+        vectorised_patches = np.vstack(all_vectors)
 
-    vectorised_patches = np.vstack(all_vectors)
+        X = StandardScaler().fit_transform(vectorised_patches)
 
-    X = StandardScaler().fit_transform(vectorised_patches)
+        reducer = umap.UMAP(
+            n_components=2,
+            n_neighbors=15,
+            min_dist=0.1,
+            metric="euclidean",
+            low_memory=True
+        )
 
-    reducer = umap.UMAP(
-        n_components=2,
-        n_neighbors=15,
-        min_dist=0.1,
-        metric="euclidean",
-        low_memory=True
-    )
+        embedding = reducer.fit_transform(X)
 
-    embedding = reducer.fit_transform(X)
+        from sklearn.mixture import GaussianMixture
 
-    kmeans = KMeans(n_clusters=7, random_state=42)
-    labels = kmeans.fit_predict(embedding)
+        gmm = GaussianMixture(n_components=8, covariance_type="full")
+        labels = gmm.fit_predict(embedding)
 
-    #positions = get_positions(image, 8)
-    #label_img = label_to_image(image, labels, positions)
+        positions = get_positions(image, 16, 8)
+        #label_img = label_to_image(image, labels, positions, 16)
 
-    #mean_intensities = [image[label_img==cl].mean() for cl in np.unique(labels)]
-    #crystal_cluster = np.argmin(mean_intensities)
+        #mean_intensities = [image[label_img==cl].mean() for cl in np.unique(labels)]
+        #crystal_cluster = np.argmin(mean_intensities)
+        #mask = (label_img == crystal_cluster).astype(np.uint8)
 
-    #mask = (label_img == crystal_cluster).astype(np.uint8)
-
-    image_datapoint = {
-        'clustered': labels,
-    }
+        image_datapoint = {
+            'image':str(dm3_file),
+            'clustered': labels,
+            'positions': positions
+        }
+        
+        dataset.append(image_datapoint)
 
     OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "/project/dataset")
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     #tifffile.imwrite(os.path.join(OUTPUT_DIR, "image_flattened.tif"), flattened_image)
-    df = pd.DataFrame(image_datapoint)
-    df.to_parquet(os.path.join(OUTPUT_DIR, "larger_patch.parquet"), index=False)
+    df = pd.DataFrame(dataset)
+    df.to_parquet(os.path.join(OUTPUT_DIR, "all_images_8_small.parquet"), index=False)
     print(f'dataset exported to {OUTPUT_DIR}')
 
 if __name__ == "__main__":
