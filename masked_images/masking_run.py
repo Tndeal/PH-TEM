@@ -18,6 +18,8 @@ def main():
     from itertools import islice
     import tifffile
     from skimage.restoration import denoise_nl_means
+    from scipy.stats import gaussian_kde
+    import json
 
     pimgr = PersistenceImager(
         pixel_size=16,
@@ -25,6 +27,27 @@ def main():
         pers_range=(0, 300)
     )
     pimgr_fit = False
+
+    def cluster_persistence_density(dgms_in_cluster, grid_size=100, bw_method=None):
+        all_points = np.vstack([d for d in dgms_in_cluster if len(d) > 0])
+        births = all_points[:, 0]
+        lifetimes = all_points[:, 1] - all_points[:, 0]
+
+        coords = np.vstack([births, lifetimes])
+        kde = gaussian_kde(coords, bw_method=bw_method)
+
+        # evaluate on a grid for visualisation
+        b_min, b_max = births.min(), births.max()
+        l_min, l_max = lifetimes.min(), lifetimes.max()
+
+        bb, ll = np.meshgrid(
+            np.linspace(b_min, b_max, grid_size),
+            np.linspace(l_min, l_max, grid_size)
+        )
+        grid_coords = np.vstack([bb.ravel(), ll.ravel()])
+        density_grid = kde(grid_coords).reshape(grid_size, grid_size)
+
+        return kde, density_grid, (b_min, b_max, l_min, l_max)
 
     def PH_patch(patched_image):
         nonlocal pimgr_fit
@@ -48,7 +71,7 @@ def main():
                 vec = pimg.ravel()
                 vectors.append(vec)
         vectors = np.vstack(vectors)
-        return vectors
+        return dgms, vectors
 
     def get_positions(image_data, patch_size=64, stride=None):
         if stride is None:
@@ -89,10 +112,11 @@ def main():
 
     dataset = []
 
-    base_dir = Path(os.environ["IMAGES_DIR"]) / "2022_02_02 5nm Ag nanoparticles on UTC/"
+    base_dir = Path("../hrtem_files") / "2022_02_02 5nm Ag nanoparticles on UTC/"
 
-    for dm3_file in glob.glob(os.path.join(base_dir, "*.dm3")):
-
+    for i, dm3_file in enumerate(glob.glob(os.path.join(base_dir, "*.dm3"))):
+        if i >= 1:
+            break
         data_dict = dm.dmReader(str(Path(dm3_file).resolve()))
         image = data_dict['data']
         
@@ -104,11 +128,13 @@ def main():
         masked_image = np.where(mask, image, np.nan)
 
         all_vectors = []
+        all_dgms = []
 
         for patch_batch in iter_patch_batches(masked_image):
             #normalized_batch = [z_score_transform(p) for p in patch_batch]
-            vec = PH_patch(patch_batch)
+            dgms, vec = PH_patch(patch_batch)
             all_vectors.append(vec)
+            all_dgms.extend(dgms)
 
         vectorised_patches = np.vstack(all_vectors)
 
@@ -136,20 +162,30 @@ def main():
         #crystal_cluster = np.argmin(mean_intensities)
         #mask = (label_img == crystal_cluster).astype(np.uint8)
 
+        cluster_densities = {}
+        for label in np.unique(labels):
+            indices = np.where(labels == label)[0]
+            cluster_dgms = [all_dgms[i] for i in indices]
+            kde, density_grid, extent = cluster_persistence_density(cluster_dgms)
+            cluster_densities[int(label)] = {
+                "density_grid": density_grid.tolist(),
+                "extent": list(extent),
+            }
+        
         image_datapoint = {
             'image':str(dm3_file),
-            'clustered': labels,
-            'positions': positions
+            'clustered_labels': labels,
+            'positions': positions,
+            "densities": json.dumps(cluster_densities)
         }
-        
         dataset.append(image_datapoint)
 
-    OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "/project/dataset")
+    OUTPUT_DIR = "./output/"
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     #tifffile.imwrite(os.path.join(OUTPUT_DIR, "image_flattened.tif"), flattened_image)
     df = pd.DataFrame(dataset)
-    df.to_parquet(os.path.join(OUTPUT_DIR, "masked_images.parquet"), index=False)
+    df.to_parquet(os.path.join(OUTPUT_DIR, "masked_images_densities.parquet"), index=False)
     print(f'dataset exported to {OUTPUT_DIR}')
 
 if __name__ == "__main__":

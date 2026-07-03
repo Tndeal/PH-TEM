@@ -6,8 +6,13 @@ image_topology/test_images.zip
 image_topology/test_output/
 masked_images/cluster_results/
 masked_images/masked_images.parquet
+masked_images/masked_images_64.parquet
+masked_images/masked_images_densities.parquet
+masked_images/cluster_results_64/
+masked_images/output/
 doi_10_7941_D1SP93__v20230731/
 cluster_8/cluster_results/
 cluster_8/cluster_results_small/
 cluster_8/parquets/
 doi_10_7941_D1SP93__v20230731.zip
+experiment/normalised_run.parquet
